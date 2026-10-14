@@ -1,0 +1,6 @@
+{
+  "name": "NeuroMaze BCI",
+  "description": "Нейроинтерфейсная игра-лабиринт с подключением ЭЭГ-устройства FreeEEG16 по Bluetooth LE, декодированием нейроритмов и кинематическим управлением",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
