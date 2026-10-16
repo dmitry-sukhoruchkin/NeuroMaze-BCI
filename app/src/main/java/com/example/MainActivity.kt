@@ -34,7 +34,6 @@ import com.example.ui.components.BleDeviceDialog
 import com.example.ui.components.EegTelemetrySheet
 import com.example.ui.components.GameBottomControlBar
 import com.example.ui.components.GameTopBar
-import com.example.ui.components.LevelWinDialog
 import com.example.ui.components.MazeCanvas
 import com.example.ui.components.NeuroHud
 import com.example.ui.components.VirtualJoystick
@@ -80,8 +79,8 @@ fun NeuroMazeApp(
     }
 
     // Trigger haptic vibration on level complete
-    LaunchedEffect(uiState.showWinDialog) {
-        if (uiState.showWinDialog) {
+    LaunchedEffect(uiState.mazesSolved) {
+        if (uiState.mazesSolved > 0) {
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     vibrator?.vibrate(
@@ -180,13 +179,6 @@ fun NeuroMazeApp(
                 uiState = uiState,
                 onSetGain = { gain -> viewModel.setHardwareGain(gain) },
                 onDismiss = { viewModel.closeTelemetrySheet() }
-            )
-        }
-
-        if (uiState.showWinDialog) {
-            LevelWinDialog(
-                stats = uiState.lastWinStats,
-                onNextMaze = { viewModel.dismissWinDialog() }
             )
         }
     }

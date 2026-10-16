@@ -44,6 +44,35 @@ data class MontyPrediction(
     val angleErrorDeg: Float = 0f
 )
 
+data class ThetaAnalytics(
+    val frequencyHz: Float = 6.0f,
+    val periodMs: Float = 166.7f,
+    val phaseDeg: Float = 0.0f,
+    val currentSlot: Int = 0, // 0..31 Lisman-Jensen slot
+    val meanThetaUv: Float = 0.0f,
+    val thetaPeakChannel: Int = 1
+)
+
+data class CoherencePairItem(
+    val pairIndex: Int,
+    val channelA: Int,
+    val channelB: Int,
+    val ciPlv: Float,
+    val distanceMm: Float,
+    val directionAngleDeg: Float
+)
+
+data class WorkingMemoryCoherenceAnalytics(
+    val meanCiPlv: Float = 0.0f,
+    val maxCiPlv: Float = 0.0f,
+    val significantPairsCount: Int = 0,
+    val topPairs: List<CoherencePairItem> = emptyList(),
+    val spatialDipoleMagUv: Float = 0.0f,
+    val spatialDipoleMagMv: Float = 0.0f,
+    val spatialDipoleAngleDeg: Float = 0.0f,
+    val noiseRmsMv: Float = 0.002f
+)
+
 data class NeuroTelemetry(
     val isLiveBle: Boolean = false,
     val deviceName: String = "BCI Simulator",
@@ -54,6 +83,8 @@ data class NeuroTelemetry(
     val bandPowers: BandPowers = BandPowers(),
     val intent: NeuroIntent = NeuroIntent(),
     val monty: MontyPrediction = MontyPrediction(),
+    val thetaAnalytics: ThetaAnalytics = ThetaAnalytics(),
+    val coherenceAnalytics: WorkingMemoryCoherenceAnalytics = WorkingMemoryCoherenceAnalytics(),
     val channelMicrovolts: FloatArray = FloatArray(16),
     val channelSaturation: BooleanArray = BooleanArray(16),
     val directionalMemory: FloatArray = FloatArray(8) // 8 compass directions [N, NE, E, SE, S, SW, W, NW]
@@ -74,8 +105,10 @@ enum class BleConnectionState {
 }
 
 enum class CameraViewMode {
-    WORLD,        // Fixed top-down view
-    EGO_ROTATING  // Rotating view from avatar's perspective
+    SCREEN_WORLD,   // 1. Основной: Камера статична на лабиринт, движение от камеры, поворот аватара ни на что не влияет
+    EGO_ROTATING,   // 2. Камера вращается с аватаром (360 эго-вид), движение от камеры
+    TANK_PRO,       // 3. Мультиплеер/Профи: Лабиринт статичен, движение относительно поворота аватара
+    GENSHIN_ORBIT   // 4. Геншин: Сагитта вращает камеру, движение от камеры, аватар поворачивается туда куда идет
 }
 
 enum class GameControlMode {

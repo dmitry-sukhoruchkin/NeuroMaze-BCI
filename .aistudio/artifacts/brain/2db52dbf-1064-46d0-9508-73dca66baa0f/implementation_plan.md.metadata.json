@@ -1,0 +1,6 @@
+{
+  "summary": "Implementation plan for seamless maze auto-advancement without blocking popups, restoration of sagittal curvature steering (turning/yaw) in ego view from FCz/midline electrodes, and on-demand live microvolt (µV) channel telemetry in the debug sheet.",
+  "updatedAt": "2026-10-16T06:44:29.021812446Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

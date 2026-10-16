@@ -17,9 +17,14 @@ object EegConstants {
     val SUPPORTED_GAINS = intArrayOf(4, 8, 16, 32)
     val GAIN_TO_CODE = mapOf(1 to 0, 2 to 1, 4 to 2, 8 to 3, 16 to 4, 32 to 5, 64 to 6, 128 to 7)
 
+    // Fixed conversion from ADC count to physical microvolts / millivolts.
+    // The signal amplitude is CONSTANT regardless of hardware gain!
+    const val FIXED_UV_SCALE: Float = (1.2f / 16.0f / 8388607.0f) * 1e6f // ~0.0089407 uV/count
+    const val FIXED_MV_SCALE: Float = FIXED_UV_SCALE / 1000f
+
     fun getUvScale(gain: Int): Float {
-        val g = gain.coerceAtLeast(1)
-        return (1.2f / g.toFloat() / 8388607.0f) * 1e6f
+        // Amplitude is invariant to gain: always fixed physical scale
+        return FIXED_UV_SCALE
     }
 
     fun getSatThresholdUv(gain: Int): Float {
@@ -27,9 +32,19 @@ object EegConstants {
         return (1.2f / g.toFloat()) * 0.95f * 1e6f
     }
 
+    // Gain determines the noise floor: higher gain = lower noise floor
+    fun getNoiseFloorUv(gain: Int): Float {
+        val g = gain.coerceIn(4, 32).toFloat()
+        return (16.0f / g) * 1.5f
+    }
+
+    fun getNoiseFloorMv(gain: Int): Float {
+        return getNoiseFloorUv(gain) / 1000f
+    }
+
     // Default 16x gain values
     const val DEFAULT_GAIN = 16
-    val UV_SCALE: Float = getUvScale(DEFAULT_GAIN)
+    val UV_SCALE: Float = FIXED_UV_SCALE
     val SAT_THRESHOLD_UV: Float = getSatThresholdUv(DEFAULT_GAIN)
 
     // Physical FreeEEG16-Alpha2 (26mm) Coordinates

@@ -43,9 +43,26 @@ class WorkingMemoryEngine {
     private val gammaQ = FloatArray(NUM_CHANNELS)
     private val gammaPower = FloatArray(NUM_CHANNELS)
 
-    // DC baseline tracking per channel
+    // DC baseline tracking and signal magnitude per channel
     private val channelBaselines = FloatArray(NUM_CHANNELS)
     private val channelMicrovolts = FloatArray(NUM_CHANNELS)
+    private val channelRms = FloatArray(NUM_CHANNELS)
+    private val channelPeakUv = FloatArray(NUM_CHANNELS)
+
+    // Sagitta angular rate tracking
+    private var lastAngleRad = 0f
+    private var hasLastAngle = false
+    private var smoothedTorque = 0f
+
+    // Temporal integration buffers for 120-pair ciPLV cross-spectral imaginary density
+    private val smoothedCrossImag = FloatArray(NUM_PAIRS)
+    private val smoothedPowerProd = FloatArray(NUM_PAIRS)
+    private val ciPlv120 = FloatArray(NUM_PAIRS)
+
+    // Theta cycle frequency and period tracking
+    private var lastThetaPhase = 0f
+    private var smoothedThetaFreqHz = 6.0f
+    private var smoothedThetaPeriodMs = 166.7f
 
     // Preallocated 120-pair difference buffers
     private val sinDPhi120 = FloatArray(NUM_PAIRS)
@@ -74,6 +91,24 @@ class WorkingMemoryEngine {
         }
     }
 
+    fun getChannelMicrovolts(): FloatArray {
+        val result = FloatArray(NUM_CHANNELS)
+        for (i in 0 until NUM_CHANNELS) {
+            val rms = sqrt(channelRms[i].coerceAtLeast(0f))
+            result[i] = if (rms > 0.01f) rms else abs(channelMicrovolts[i])
+        }
+        return result
+    }
+
+    fun getChannelSaturation(gain: Int = 16): BooleanArray {
+        val sat = BooleanArray(NUM_CHANNELS)
+        val thresholdUv = (1_200_000f / gain) * 0.85f
+        for (i in 0 until NUM_CHANNELS) {
+            sat[i] = channelPeakUv[i] >= thresholdUv || abs(channelMicrovolts[i]) >= thresholdUv
+        }
+        return sat
+    }
+
     /**
      * Ingest sample and extract exact instantaneous quadrature (I, Q) & phase
      * for both Theta (6 Hz) and Gamma (40 Hz) bands via 2nd-order IIR resonators.
@@ -95,6 +130,8 @@ class WorkingMemoryEngine {
         for (ch in 0 until NUM_CHANNELS) {
             val v = uV[ch]
             channelMicrovolts[ch] = v
+            channelRms[ch] = channelRms[ch] * 0.95f + (v * v) * 0.05f
+            channelPeakUv[ch] = channelPeakUv[ch] * 0.92f + abs(v) * 0.08f
             channelBaselines[ch] = channelBaselines[ch] * 0.995f + v * 0.005f
             val x = (v - channelBaselines[ch]).coerceIn(-1000f, 1000f)
 
@@ -116,34 +153,63 @@ class WorkingMemoryEngine {
             gammaQ[ch] = qGa
             gammaPower[ch] = gammaPower[ch] * 0.9f + (yGa * yGa + qGa * qGa) * 0.1f
         }
+
+        // 3. Accumulate and temporally integrate 120-pair cross-spectral imaginary coherence across gamma band
+        val alphaCoherence = 0.94f // integration over ~125 ms theta cycle
+        for (p in 0 until NUM_PAIRS) {
+            val i = EegConstants.PAIR_I[p]
+            val j = EegConstants.PAIR_J[p]
+            val cross = gammaQ[j] * gammaI[i] - gammaI[j] * gammaQ[i]
+            val pProd = sqrt(gammaPower[i] * gammaPower[j])
+
+            smoothedCrossImag[p] = smoothedCrossImag[p] * alphaCoherence + cross * (1f - alphaCoherence)
+            smoothedPowerProd[p] = smoothedPowerProd[p] * alphaCoherence + pProd * (1f - alphaCoherence)
+            val plv = (smoothedCrossImag[p] / (smoothedPowerProd[p] + 1e-4f)).coerceIn(-1.0f, 1.0f)
+            ciPlv120[p] = plv
+            sinDPhi120[p] = plv
+        }
+
+        // 4. Track Theta period and instantaneous frequency from reference channel 0 (FCz)
+        val thQ = thetaQ[0]
+        val thI = thetaI[0]
+        val thPhase = atan2(thQ.toDouble(), thI.toDouble()).toFloat()
+        var dTh = thPhase - lastThetaPhase
+        while (dTh > PI.toFloat()) dTh -= TWO_PI
+        while (dTh < -PI.toFloat()) dTh += TWO_PI
+        lastThetaPhase = thPhase
+
+        val instFreq = (abs(dTh) / (TWO_PI * dt)).coerceIn(3.5f, 9.5f)
+        smoothedThetaFreqHz = smoothedThetaFreqHz * 0.97f + instFreq * 0.03f
+        smoothedThetaPeriodMs = 1000f / smoothedThetaFreqHz.coerceIn(4f, 10f)
     }
 
     /**
      * Compute 32-slot Theta-Gamma PAC with Downbeat Slot 0 Anchor Referencing,
      * extract gamepad axes (lx, ly, rx, ry), and update Predictive Monty NLMS.
-     *
-     * Highly optimized: Vectorized CPU execution in ~0.03 milliseconds.
      */
     fun processWorkingMemory(
         idealX: Float,
         idealY: Float,
-        sps: Float
+        sps: Float,
+        gain: Int = 16
     ): WorkingMemoryResult {
         // 1. Compute 120-pair imaginary Phase Locking Value (ciPLV) across Gamma band
-        // Pure algebraic formulation: sin(dPhi_ij) = (Q_i * I_j - I_i * Q_j) / (sqrt(P_i * P_j) + eps)
         var baseDipoleSumX = 0f
         var baseDipoleSumY = 0f
+        var sumAbsCiPlv = 0f
+        var maxCiPlv = 0f
+        var sigCount = 0
 
         for (p in 0 until NUM_PAIRS) {
-            val i = EegConstants.PAIR_I[p]
-            val j = EegConstants.PAIR_J[p]
-
-            // Phase difference phi_j - phi_i along vector r_j - r_i
-            val crossImag = gammaQ[j] * gammaI[i] - gammaI[j] * gammaQ[i]
-            val denom = sqrt(gammaPower[i] * gammaPower[j]) + 1e-4f
-            val s = (crossImag / denom).coerceIn(-1.0f, 1.0f)
-            sinDPhi120[p] = s
-
+            val s = ciPlv120[p]
+            val absS = abs(s)
+            sumAbsCiPlv += absS
+            if (absS > maxCiPlv) {
+                maxCiPlv = absS
+            }
+            if (absS > 0.18f) {
+                sigCount++
+            }
             baseDipoleSumX += s * EegConstants.PROJ_X[p]
             baseDipoleSumY += s * EegConstants.PROJ_Y[p]
         }
@@ -194,7 +260,21 @@ class WorkingMemoryEngine {
         val realX = if (realMag > 0.01f) smoothedRealX / realMag else normDirX
         val realY = if (realMag > 0.01f) smoothedRealY / realMag else normDirY
 
-        // Sagitta (turning curvature rx)
+        // Sagitta (turning curvature rx) via time derivative of intention angle d(theta)/dt
+        val currentAngleRad = atan2(realY.toDouble(), realX.toDouble()).toFloat()
+        if (!hasLastAngle) {
+            lastAngleRad = currentAngleRad
+            hasLastAngle = true
+        }
+        var angleDiff = currentAngleRad - lastAngleRad
+        while (angleDiff > PI.toFloat()) angleDiff -= TWO_PI
+        while (angleDiff < -PI.toFloat()) angleDiff += TWO_PI
+        lastAngleRad = currentAngleRad
+
+        val angVelocity = (angleDiff * 8.0f).coerceIn(-2.0f, 2.0f)
+        smoothedTorque = smoothedTorque * 0.70f + angVelocity * 0.30f
+
+        // Also incorporate 32-slot trajectory chord curvature
         var sagittaSum = 0.0f
         val safeLen = if (dLen > 1e-4f) dLen else 1.0f
         for (k in 1 until (NUM_SLOTS - 1)) {
@@ -202,7 +282,8 @@ class WorkingMemoryEngine {
             val pyK = traj2D[k][1] - baseY
             sagittaSum += (endX * pyK - endY * pxK)
         }
-        val rx = (sagittaSum / (safeLen * 16.0f)).coerceIn(-1.0f, 1.0f)
+        val chordSagitta = (sagittaSum / (safeLen * 16.0f)).coerceIn(-1.0f, 1.0f)
+        val rx = (smoothedTorque * 0.80f + chordSagitta * 0.20f).coerceIn(-1.0f, 1.0f)
 
         // Temporal shift (ry)
         val midIdx = NUM_SLOTS / 2

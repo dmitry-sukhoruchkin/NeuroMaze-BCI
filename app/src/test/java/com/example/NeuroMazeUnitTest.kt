@@ -1,5 +1,6 @@
 package com.example
 
+import com.example.eeg.CameraViewMode
 import com.example.eeg.EegConstants
 import com.example.eeg.WorkingMemoryEngine
 import com.example.maze.AvatarState
@@ -39,7 +40,7 @@ class NeuroMazeUnitTest {
         val avatar = AvatarState()
         avatar.reset(1.5f, 1.5f)
 
-        // Wall at (0, 1): moving left should collide and keep avatar within bounds
+        // Wall at (0, 1): moving left in SCREEN_WORLD should collide and keep avatar within bounds
         for (i in 0 until 10) {
             avatar.updateMotion(
                 intentX = -1f,
@@ -47,10 +48,37 @@ class NeuroMazeUnitTest {
                 intentTorque = 0f,
                 persistence = 0.5f,
                 maze = maze,
-                isRotatingView = false
+                cameraMode = CameraViewMode.SCREEN_WORLD
             )
         }
-        assertTrue("Avatar x should not be inside outer wall (x > 1.0)", avatar.x >= 1.0f)
+        assertTrue("Avatar x should not be inside outer wall (x >= 1.0)", avatar.x >= 1.0f)
+
+        // Mode 3 (TANK_PRO): Avatar rotated 90 deg right (PI/2), moving forward (-Y) should move right (+X)
+        avatar.reset(1.5f, 1.5f)
+        avatar.angle = (Math.PI / 2.0).toFloat()
+        avatar.updateMotion(
+            intentX = 0f,
+            intentY = -1f, // Forward intent
+            intentTorque = 0f,
+            persistence = 0.5f,
+            maze = maze,
+            cameraMode = CameraViewMode.TANK_PRO
+        )
+        // With angle=PI/2, forward moves +X (right)
+        assertTrue("Avatar moved right along facing angle in TANK_PRO", avatar.x >= 1.5f)
+
+        // Mode 4 (GENSHIN_ORBIT): Camera at 0, moving forward moves up (-Y) and avatar faces up
+        avatar.reset(1.5f, 1.5f)
+        avatar.cameraYaw = 0f
+        avatar.updateMotion(
+            intentX = 0f,
+            intentY = -1f,
+            intentTorque = 0f,
+            persistence = 0.5f,
+            maze = maze,
+            cameraMode = CameraViewMode.GENSHIN_ORBIT
+        )
+        assertTrue("Avatar moved up along cameraYaw in GENSHIN_ORBIT", avatar.y <= 1.5f)
     }
 
     @Test

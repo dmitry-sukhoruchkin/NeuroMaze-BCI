@@ -81,6 +81,8 @@ class FreeEegBleManager(private val context: Context) {
     private val _saturatedChannels = MutableStateFlow<List<Int>>(emptyList())
     val saturatedChannels: StateFlow<List<Int>> = _saturatedChannels.asStateFlow()
 
+    val latestChannelUv = FloatArray(16)
+
     private var lastCounter = -1
     private val packetCounterInSec = AtomicInteger(0)
     private var lastSpsTime = System.currentTimeMillis()
@@ -425,6 +427,7 @@ class FreeEegBleManager(private val context: Context) {
         }
 
         _saturatedChannels.value = saturated
+        System.arraycopy(uV, 0, latestChannelUv, 0, 16)
 
         val packet = EegPacket(
             counter = counter,

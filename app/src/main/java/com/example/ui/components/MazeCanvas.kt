@@ -51,8 +51,9 @@ fun MazeCanvas(
         val offsetX = (width - gridWidth) / 2f
         val offsetY = (height - gridHeight) / 2f
 
-        val isRotating = uiState.cameraMode == CameraViewMode.EGO_ROTATING
-        val rotationDeg = if (isRotating) -Math.toDegrees(uiState.avatarAngle.toDouble()).toFloat() else 0f
+        val isRotating = uiState.cameraMode == CameraViewMode.EGO_ROTATING || uiState.cameraMode == CameraViewMode.GENSHIN_ORBIT
+        val activeYaw = if (uiState.cameraMode == CameraViewMode.GENSHIN_ORBIT) uiState.cameraYaw else uiState.avatarAngle
+        val rotationDeg = if (isRotating) -Math.toDegrees(activeYaw.toDouble()).toFloat() else 0f
 
         Canvas(modifier = Modifier.fillMaxSize()) {
             val centerCanvas = Offset(width / 2f, height / 2f)

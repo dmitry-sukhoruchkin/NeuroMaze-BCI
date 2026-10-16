@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.floor
@@ -37,11 +38,12 @@ data class GameUiState(
     val avatarX: Float = 1.5f,
     val avatarY: Float = 1.5f,
     val avatarAngle: Float = 0f,
+    val cameraYaw: Float = 0f,
     val avatarTrail: List<PathPoint> = emptyList(),
     val idealVector: Pair<Float, Float> = Pair(1f, 0f),
     val lookaheadPath: List<PathPoint> = emptyList(),
     val controlMode: GameControlMode = GameControlMode.BCI_DIRECT,
-    val cameraMode: CameraViewMode = CameraViewMode.WORLD,
+    val cameraMode: CameraViewMode = CameraViewMode.SCREEN_WORLD,
     val showIdealPath: Boolean = true,
     val showTrail: Boolean = true,
     val showMontyVector: Boolean = true,
@@ -215,14 +217,38 @@ class NeuroMazeViewModel(application: Application) : AndroidViewModel(applicatio
 
             when (_uiState.value.controlMode) {
                 GameControlMode.BCI_AUTOPILOT -> {
-                    driveX = wmResult.montyX * intentMag + virtualJoyX * 6.0f
-                    driveY = wmResult.montyY * intentMag + virtualJoyY * 6.0f
-                    driveTorque = 0f
+                    if (_uiState.value.cameraMode == CameraViewMode.SCREEN_WORLD) {
+                        // Режим 1: движение от камеры по экрану
+                        driveX = wmResult.montyX * intentMag + virtualJoyX * 6.0f
+                        driveY = wmResult.montyY * intentMag + virtualJoyY * 6.0f
+                        driveTorque = 0f
+                    } else {
+                        // Режимы 2, 3, 4: движение вперед и подруливание
+                        driveX = 0f + virtualJoyX * 6.0f
+                        driveY = -intentMag + virtualJoyY * 6.0f
+                        val targetAngle = atan2(wmResult.montyY.toDouble(), wmResult.montyX.toDouble()).toFloat() + (PI.toFloat() / 2f)
+                        val activeAngle = if (_uiState.value.cameraMode == CameraViewMode.GENSHIN_ORBIT) avatar.cameraYaw else avatar.angle
+                        var aDiff = targetAngle - activeAngle
+                        while (aDiff > PI.toFloat()) aDiff -= (2f * PI.toFloat())
+                        while (aDiff < -PI.toFloat()) aDiff += (2f * PI.toFloat())
+                        driveTorque = (aDiff * 0.8f).coerceIn(-1.5f, 1.5f)
+                    }
                 }
                 GameControlMode.BCI_DIRECT -> {
-                    driveX = wmResult.realX * intentMag + virtualJoyX * 10.0f
-                    driveY = wmResult.realY * intentMag + virtualJoyY * 10.0f
-                    driveTorque = wmResult.realTq * 0.5f + (virtualJoyX * 0.8f)
+                    if (_uiState.value.cameraMode == CameraViewMode.SCREEN_WORLD) {
+                        // Режим 1 (Основной): Камера статична, движение строго от камеры/экрана,
+                        // поворот аватара просто вращается и ни на что не влияет
+                        driveX = wmResult.realX * intentMag + virtualJoyX * 10.0f
+                        driveY = wmResult.realY * intentMag + virtualJoyY * 10.0f
+                        driveTorque = wmResult.realTq * 1.8f + (virtualJoyX * 0.8f)
+                    } else {
+                        // Режимы 2 (EGO), 3 (TANK PRO), 4 (GENSHIN ORBIT):
+                        // Намерение вперед толкает по оси камеры/аватара, поворот от сагитты
+                        val forwardDrive = if (mag > 0.05f) -mag * intentMag else wmResult.realY * intentMag
+                        driveX = wmResult.realX * (intentMag * 0.25f) + virtualJoyX * 10.0f
+                        driveY = forwardDrive + virtualJoyY * 10.0f
+                        driveTorque = wmResult.realTq * 1.8f + (virtualJoyX * 0.8f)
+                    }
                 }
                 GameControlMode.MANUAL_TOUCH -> {
                     val boost = 1f + currentPersistence * 3.0f
@@ -233,14 +259,13 @@ class NeuroMazeViewModel(application: Application) : AndroidViewModel(applicatio
             }
 
             // 5. AVATAR DISPLACEMENT UPDATE
-            val isRotating = _uiState.value.cameraMode == CameraViewMode.EGO_ROTATING
             avatar.updateMotion(
                 intentX = driveX,
                 intentY = driveY,
                 intentTorque = driveTorque,
                 persistence = currentPersistence,
                 maze = maze,
-                isRotatingView = isRotating
+                cameraMode = _uiState.value.cameraMode
             )
 
             // 6. CHECK EXIT
@@ -257,6 +282,24 @@ class NeuroMazeViewModel(application: Application) : AndroidViewModel(applicatio
                 val cDeg = WorkingMemoryEngine.COMPASS_ANGLES_DEG[c]
                 val diff = abs((eegHeadingDeg - cDeg + 180f) % 360f - 180f)
                 compassBars[c] = (1.0f - diff / 60.0f).coerceIn(0f, 1f) * mag.coerceIn(0.2f, 1f)
+            }
+
+            // On-demand channel microvolts calculation: only compute full RMS/saturation when telemetry sheet is open
+            val isTelemetryOpen = _uiState.value.showTelemetrySheet
+            val chMicrovolts: FloatArray
+            val chSaturation: BooleanArray
+            if (isTelemetryOpen) {
+                if (isLiveBle) {
+                    chMicrovolts = bleManager.latestChannelUv.clone()
+                    val satList = bleManager.saturatedChannels.value
+                    chSaturation = BooleanArray(16) { satList.contains(it) }
+                } else {
+                    chMicrovolts = wmEngine.getChannelMicrovolts()
+                    chSaturation = wmEngine.getChannelSaturation(_uiState.value.hardwareGain)
+                }
+            } else {
+                chMicrovolts = FloatArray(16)
+                chSaturation = BooleanArray(16)
             }
 
             val telemetry = NeuroTelemetry(
@@ -287,6 +330,8 @@ class NeuroMazeViewModel(application: Application) : AndroidViewModel(applicatio
                     montyHeadingDeg = wmResult.montyHeadingDeg,
                     angleErrorDeg = wmResult.angleErrorDeg
                 ),
+                channelMicrovolts = chMicrovolts,
+                channelSaturation = chSaturation,
                 directionalMemory = compassBars
             )
 
@@ -296,6 +341,7 @@ class NeuroMazeViewModel(application: Application) : AndroidViewModel(applicatio
                 avatarX = avatar.x,
                 avatarY = avatar.y,
                 avatarAngle = avatar.angle,
+                cameraYaw = avatar.cameraYaw,
                 avatarTrail = avatar.trail.toList(),
                 idealVector = Pair(idealX, idealY),
                 lookaheadPath = path,
@@ -333,7 +379,7 @@ class NeuroMazeViewModel(application: Application) : AndroidViewModel(applicatio
             exitPos = maze.exitPos,
             optimalDistance = maze.optimalDistance,
             lastWinStats = winStats,
-            showWinDialog = true
+            showWinDialog = false
         )
     }
 
@@ -359,10 +405,11 @@ class NeuroMazeViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun toggleCameraMode() {
-        val next = if (_uiState.value.cameraMode == CameraViewMode.WORLD) {
-            CameraViewMode.EGO_ROTATING
-        } else {
-            CameraViewMode.WORLD
+        val next = when (_uiState.value.cameraMode) {
+            CameraViewMode.SCREEN_WORLD -> CameraViewMode.EGO_ROTATING
+            CameraViewMode.EGO_ROTATING -> CameraViewMode.TANK_PRO
+            CameraViewMode.TANK_PRO -> CameraViewMode.GENSHIN_ORBIT
+            CameraViewMode.GENSHIN_ORBIT -> CameraViewMode.SCREEN_WORLD
         }
         _uiState.value = _uiState.value.copy(cameraMode = next)
     }

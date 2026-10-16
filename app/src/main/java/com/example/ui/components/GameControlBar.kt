@@ -219,13 +219,23 @@ fun GameBottomControlBar(
             tag = "toggle_autopilot_button"
         )
 
-        // Camera (World vs Ego)
-        val isEgo = uiState.cameraMode == CameraViewMode.EGO_ROTATING
+        // Camera (1. WORLD SCREEN vs 2. EGO 360 vs 3. TANK PRO vs 4. GENSHIN ORBIT)
+        val camLabel = when (uiState.cameraMode) {
+            CameraViewMode.SCREEN_WORLD -> "CAM 1: WORLD"
+            CameraViewMode.EGO_ROTATING -> "CAM 2: EGO 360"
+            CameraViewMode.TANK_PRO -> "CAM 3: TANK (PRO)"
+            CameraViewMode.GENSHIN_ORBIT -> "CAM 4: GENSHIN"
+        }
         ControlButton(
             icon = Icons.Default.Navigation,
-            label = if (isEgo) "CAM: EGO 360" else "CAM: WORLD",
-            isActive = isEgo,
-            activeColor = NeonCyan,
+            label = camLabel,
+            isActive = uiState.cameraMode != CameraViewMode.SCREEN_WORLD,
+            activeColor = when (uiState.cameraMode) {
+                CameraViewMode.EGO_ROTATING -> NeonCyan
+                CameraViewMode.TANK_PRO -> NeonEmerald
+                CameraViewMode.GENSHIN_ORBIT -> NeonPink
+                else -> NeonCyan
+            },
             onClick = onToggleCamera,
             tag = "toggle_camera_button"
         )
